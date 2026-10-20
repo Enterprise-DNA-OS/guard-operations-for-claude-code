@@ -2,12 +2,66 @@
   {
     "name": "week",
     "title": "This week",
-    "subtitle": "Guard Operations for Claude Code: what needs attention, rendered by npm run view",
+    "subtitle": "What needs a person: open shifts, unlawful rostering, licences, incidents, patrols and money",
     "sections": [
       {
         "title": "Needs attention",
-        "note": "TODO(author): point this at the industry's attention view (overdue, stuck, quiet).",
-        "sql": "select 'replace me' as item, 'TODO(author)' as why"
+        "note": "The same list as /attention. Law first, then house rules, then everything else.",
+        "sql": "select item, ref, detail from (select 1 as r, 'open shift' as item, ref, site || ' ' || to_char(starts_at, 'Dy DD Mon HH24:MI') as detail from v_shifts where status = 'open' and starts_at < site_now + interval '7 days' and ends_at > site_now union all select 2, 'rostered against the law', p.ref, p.problem || ' (' || s.officer || ', ' || to_char(s.starts_at, 'Dy DD Mon HH24:MI') || ')' from v_shift_problems p join v_shifts s on s.id = p.shift_id where p.kind = 'law' and s.status in ('assigned', 'on-duty') and s.starts_at < s.site_now + interval '14 days' union all select 3, standing, ref, site || ': ' || summary from v_incidents where standing in ('regulator not notified', 'client not told') union all select 4, 'licence ' || standing, officer_code, officer || ' ' || region || ' ' || number || ' expires ' || expires_on from v_licences where days_left <= 30 and officer_status = 'active') x order by r, item, ref"
+      },
+      {
+        "title": "Sites against contract",
+        "note": "Monday to Sunday in each site's own time.",
+        "sql": "select site, client, contracted_hours as contracted, rostered_hours - open_hours as covered, open_hours as open, worked_hours as worked from v_site_week order by site"
+      },
+      {
+        "title": "Patrols in the last 7 days",
+        "sql": "select site, checkpoint, sum(expected)::int as due, sum(scanned)::int as done, round(100.0 * sum(least(scanned, expected)) / nullif(sum(expected), 0))::int as completion_pct from v_patrols where day >= current_date - 7 group by site, checkpoint order by completion_pct, site"
+      }
+    ]
+  },
+  {
+    "name": "roster",
+    "title": "Roster, next 7 days",
+    "subtitle": "Every shift with its officer and anything wrong with it",
+    "sections": [
+      {
+        "title": "Shifts",
+        "sql": "select s.ref, to_char(s.starts_at, 'Dy DD Mon') as day, to_char(s.starts_at, 'HH24:MI') || '-' || to_char(s.ends_at, 'HH24:MI') as hours, s.site, coalesce(s.officer, 'OPEN') as officer, s.role, (select string_agg(p.problem, '; ') from v_shift_problems p where p.shift_id = s.id) as problems from v_shifts s where s.status not in ('cancelled', 'completed') and s.starts_at >= s.site_now::date and s.starts_at < s.site_now::date + 7 order by s.starts_at, s.site"
+      }
+    ]
+  },
+  {
+    "name": "licences",
+    "title": "Licence register",
+    "subtitle": "Every officer's certificate or licence, soonest to expire first",
+    "sections": [
+      {
+        "title": "Licences",
+        "sql": "select officer_code as code, officer, region, kind, classes, number, expires_on, days_left, standing, to_char(next_shift, 'Dy DD Mon') as next_shift from v_licences where officer_status = 'active' order by expires_on"
+      },
+      {
+        "title": "Officers with no licence on record",
+        "sql": "select o.code, o.name, o.employment from officers o where o.status = 'active' and not exists (select 1 from licences l where l.officer_id = o.id and l.expires_on >= current_date) order by o.code"
+      }
+    ]
+  },
+  {
+    "name": "money",
+    "title": "Money",
+    "subtitle": "Worked and not invoiced, invoices outstanding, margin by site",
+    "sections": [
+      {
+        "title": "Worked, not invoiced",
+        "sql": "select client, currency, site, count(*)::int as shifts, sum(hours)::numeric(9,1) as hours, sum(amount_cents)::bigint as amount_cents, min(day) as oldest from v_unbilled group by client, currency, site order by client, site"
+      },
+      {
+        "title": "Invoices not paid",
+        "sql": "select i.ref, c.code as client, i.currency, i.total_cents, i.raised_on, i.due_on, i.sent_on, case when i.sent_on is null then 'not sent' when i.due_on < current_date then 'overdue' else 'sent' end as standing from invoices i join clients c on c.id = i.client_id where i.paid_on is null order by i.due_on"
+      },
+      {
+        "title": "Margin per hour, last 28 days",
+        "sql": "select site, currency, round(avg(bill_rate_cents - pay_rate_cents))::int as margin_per_hour_cents, sum(worked_hours)::numeric(8,1) as hours from v_shifts where status = 'completed' and starts_at >= current_date - 28 group by site, currency order by margin_per_hour_cents"
       }
     ]
   }

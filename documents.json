@@ -1,11 +1,45 @@
 [
   {
-    "name": "example",
-    "title": "TODO(author): the first document this industry must produce",
-    "for_each": "select gen_random_uuid() as id, 'Example' as name",
+    "name": "client-service-report",
+    "title": "Monthly service report",
+    "for_each": "select id, name from clients order by code",
     "file": "name",
     "sections": [
-      { "title": "Details", "sql": "select 'replace me' as item, $1::text as record_id" }
+      { "title": "Hours delivered, last 30 days", "sql": "select site, count(*)::int as shifts, sum(worked_hours)::numeric(8,1) as hours from v_shifts where client_id = $1 and status = 'completed' and starts_at >= current_date - 30 group by site order by site" },
+      { "title": "Patrol completion", "sql": "select p.site, p.checkpoint, sum(p.expected)::int as due, sum(p.scanned)::int as done, round(100.0 * sum(least(p.scanned, p.expected)) / nullif(sum(p.expected), 0))::int as completion_pct from v_patrols p join sites s on s.code = p.site where s.client_id = $1 and p.day >= current_date - 30 group by p.site, p.checkpoint order by p.site, p.checkpoint" },
+      { "title": "Incidents", "sql": "select i.ref, i.site, to_char(i.occurred_at, 'DD Mon HH24:MI') as occurred, i.kind, i.severity, i.summary, i.police_event, i.standing from v_incidents i join sites s on s.id = i.site_id where s.client_id = $1 and i.occurred_at >= current_date - 30 order by i.occurred_at" },
+      { "title": "Shifts not covered", "sql": "select ref, site, to_char(starts_at, 'DD Mon HH24:MI') as starts, status from v_shifts where client_id = $1 and status in ('no-show', 'open') and starts_at >= current_date - 30 and starts_at < site_now order by starts_at" }
+    ]
+  },
+  {
+    "name": "incident-report",
+    "title": "Incident report",
+    "for_each": "select id, ref from incidents order by ref",
+    "file": "ref",
+    "sections": [
+      { "title": "What happened", "sql": "select i.ref, s.name as site, c.name as client, to_char(i.occurred_at, 'YYYY-MM-DD HH24:MI') as occurred, i.kind, i.severity, o.name as officer, i.police_event, i.summary, i.detail from incidents i join sites s on s.id = i.site_id join clients c on c.id = s.client_id left join officers o on o.id = i.officer_id where i.id = $1" },
+      { "title": "Who was told, and when", "sql": "select to_char(client_notified_at, 'YYYY-MM-DD HH24:MI') as client_told, case when notifiable then coalesce(to_char(regulator_notified_at, 'YYYY-MM-DD HH24:MI'), 'NOT YET') else 'not notifiable' end as regulator_told, closed_on, outcome from incidents where id = $1" }
+    ]
+  },
+  {
+    "name": "invoice",
+    "title": "Tax invoice",
+    "for_each": "select id, ref from invoices order by ref",
+    "file": "ref",
+    "sections": [
+      { "title": "Invoice", "sql": "select i.ref, c.name as client, i.period_from, i.period_to, i.raised_on, i.due_on, i.currency, i.hours, i.subtotal_cents, i.gst_cents, i.total_cents from invoices i join clients c on c.id = i.client_id where i.id = $1" },
+      { "title": "Shifts", "sql": "select si.code as site, s.ref, to_char(s.signed_on_at, 'Dy DD Mon HH24:MI') as signed_on, to_char(s.signed_off_at, 'HH24:MI') as signed_off, il.hours, il.rate_cents, il.amount_cents, inv.currency from invoice_lines il join invoices inv on inv.id = il.invoice_id join shifts s on s.id = il.shift_id join sites si on si.id = s.site_id where il.invoice_id = $1 order by s.starts_at" }
+    ]
+  },
+  {
+    "name": "site-instructions",
+    "title": "Site instructions",
+    "for_each": "select id, code from sites where active order by code",
+    "file": "code",
+    "sections": [
+      { "title": "The site", "sql": "select s.name, s.address, c.name as client, s.service, s.instructions from sites s join clients c on c.id = s.client_id where s.id = $1" },
+      { "title": "Checkpoints", "sql": "select name as checkpoint, every_minutes from checkpoints where site_id = $1 and active order by name" },
+      { "title": "Officers inducted here", "sql": "select o.name, i.inducted_on from inductions i join officers o on o.id = i.officer_id where i.site_id = $1 and o.status = 'active' order by o.name" }
     ]
   }
 ]
